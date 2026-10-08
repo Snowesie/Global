@@ -1,0 +1,18 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: genome-reader
+    runtime: docker
+    plan: starter            # persistent disks need a paid plan; use standard for heavy WGS use
+    healthCheckPath: /api/health
+    envVars:
+      - key: DNA_APP_PASSWORD
+        sync: false          # Render asks you to choose this when you create the service
+      - key: DNA_DATA_DIR
+        value: /data
+      - key: DNA_AUTO_BUILD
+        value: "1"
+    disk:
+      name: genome-data
+      mountPath: /data
+      sizeGB: 10             # downloads + ClinVar + 1000 Genomes databases + uploads

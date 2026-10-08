@@ -169,3 +169,12 @@ def test_without_reference_databases(configured, tmp_path, monkeypatch):
     r = analyse(str(p), tmp_path / "work", _noop)
     assert not r["clinvar"]["available"] and not r["ancestry"]["available"]
     assert len(r["notes"]) == 2
+
+
+def test_clinvar_keys(reference_dbs):
+    from dna_app.build_db import ClinvarKeys
+    keys = ClinvarKeys(reference_dbs / "clinvar.sqlite")
+    assert keys.contains("rs80357906", "1", 1)
+    assert keys.contains(None, "17", 41246481)
+    assert not keys.contains("rs999999999", "17", 41246482)
+    assert not keys.contains(None, "17", 43094464)  # GRCh38 position: 1000 Genomes is GRCh37

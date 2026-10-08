@@ -102,6 +102,7 @@ def reference_dbs(tmp_path_factory, kg_sites):
 def configured(reference_dbs, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CLINVAR_DB", reference_dbs / "clinvar.sqlite")
     monkeypatch.setattr(config, "KG_DB", reference_dbs / "1000g.sqlite")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(config, "UPLOAD_DIR", tmp_path / "uploads")
     monkeypatch.setattr(config, "RESULTS_DIR", tmp_path / "results")
     return tmp_path

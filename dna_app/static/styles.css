@@ -74,6 +74,8 @@ a { color: var(--accent); }
   cursor: pointer; text-align: center; transition: border-color .15s, background .15s;
 }
 .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop.disabled { opacity: .45; pointer-events: none; }
+.building { padding: 10px 12px; border-radius: 6px; background: var(--accent-soft); margin-bottom: 14px; font-size: 14px; }
 .drop strong { font-size: 18px; }
 .formats { color: var(--muted); font-size: 13px; }
 .row { margin-top: 14px; display: flex; gap: 16px; flex-wrap: wrap; }

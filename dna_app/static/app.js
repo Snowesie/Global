@@ -33,6 +33,10 @@ async function loadStatus() {
     ? `<span class="ok">${name} · ${Number(meta.records || 0).toLocaleString()} records · built ${esc((meta.built_at || "").slice(0, 10))}</span>`
     : `<span class="missing">${name} not installed</span>`;
   $("#db-status").innerHTML = badge("ClinVar", dbs.clinvar) + badge("1000 Genomes", dbs.kg);
+  $("#building").hidden = !s.building;
+  $("#building").textContent = s.building ? `${s.building} Uploads open when it finishes; this page refreshes itself.` : "";
+  $("#drop").classList.toggle("disabled", !!s.building);
+  if (s.building) setTimeout(loadStatus, 15000);
 }
 
 function showError(msg) {
@@ -47,32 +51,66 @@ function setProgress(fraction, text) {
   $("#progress-text").textContent = text;
 }
 
-function upload(file) {
+// Send one chunk with upload progress; resolves to the parsed JSON body.
+function sendChunk(url, blob, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded);
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch (_) { /* non-JSON error */ }
+      if (xhr.status === 200) resolve(body);
+      else reject(Object.assign(new Error(body.detail || `HTTP ${xhr.status}`), { status: xhr.status }));
+    };
+    xhr.onerror = () => reject(new Error("network error"));
+    xhr.send(blob);
+  });
+}
+
+async function postJson(url) {
+  const res = await fetch(url, { method: "POST" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+  return body;
+}
+
+async function upload(file) {
   showError("");
   if (file.size > maxBytes) {
     showError(`That file is ${fmtBytes(file.size)}; the limit is ${fmtBytes(maxBytes)}.`);
     return;
   }
-  const params = new URLSearchParams({ filename: file.name, assembly: $("#assembly").value });
-  const xhr = new XMLHttpRequest();
-  xhr.open("POST", "/api/upload?" + params);
-  xhr.setRequestHeader("Content-Type", "application/octet-stream");
-  xhr.upload.onprogress = (e) => {
-    if (e.lengthComputable) setProgress(0.4 * e.loaded / e.total, `Uploading ${fmtBytes(e.loaded)} of ${fmtBytes(e.total)}`);
-  };
-  xhr.onload = () => {
-    let body = {};
-    try { body = JSON.parse(xhr.responseText); } catch (_) { /* non-JSON error */ }
-    if (xhr.status !== 202) {
-      $("#progress").hidden = true;
-      showError(body.detail || `Upload failed (HTTP ${xhr.status})`);
-      return;
-    }
-    poll(body.job_id);
-  };
-  xhr.onerror = () => { $("#progress").hidden = true; showError("Upload failed — check your connection."); };
   setProgress(0, "Starting upload…");
-  xhr.send(file);
+  try {
+    const params = new URLSearchParams({ filename: file.name, size: file.size, assembly: $("#assembly").value });
+    const { upload_id: id, chunk_bytes: chunk } = await postJson("/api/uploads?" + params);
+    let offset = 0;
+    let failures = 0;
+    while (offset < file.size) {
+      const start = offset;
+      const show = (sent) => setProgress(0.4 * (start + sent) / file.size,
+        `Uploading ${fmtBytes(start + sent)} of ${fmtBytes(file.size)}`);
+      try {
+        offset = (await sendChunk(`/api/uploads/${id}?offset=${start}`, file.slice(start, start + chunk), show)).received;
+        failures = 0;
+      } catch (e) {
+        if (++failures > 4 || (e.status && e.status < 500 && e.status !== 409)) throw e;
+        setProgress(0.4 * start / file.size, `Connection hiccup — retrying (${failures}/4)…`);
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** failures));
+        // Resume from whatever the server actually has (the lost chunk may have landed).
+        const res = await fetch(`/api/uploads/${id}`);
+        if (!res.ok) throw e;
+        offset = (await res.json()).received;
+      }
+    }
+    const { job_id: jobId } = await postJson(`/api/uploads/${id}/complete`);
+    poll(jobId);
+  } catch (e) {
+    $("#progress").hidden = true;
+    showError(`Upload failed: ${e.message}`);
+  }
 }
 
 async function poll(jobId) {
@@ -256,10 +294,11 @@ function exportCsv() {
 // ---------------------------------------------------------------- wiring
 
 const drop = $("#drop");
-$("#file").addEventListener("change", (e) => e.target.files[0] && upload(e.target.files[0]));
+const canUpload = () => !drop.classList.contains("disabled");
+$("#file").addEventListener("change", (e) => e.target.files[0] && canUpload() && upload(e.target.files[0]));
 ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-drop.addEventListener("drop", (e) => e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]));
+drop.addEventListener("drop", (e) => e.dataTransfer.files[0] && canUpload() && upload(e.dataTransfer.files[0]));
 
 ["#search", "#cat-filter", "#star-filter", "#zyg-filter"].forEach((s) =>
   $(s).addEventListener("input", () => { shown = PAGE; renderFindings(); }));
