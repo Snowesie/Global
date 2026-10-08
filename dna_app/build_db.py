@@ -3,6 +3,7 @@
     python -m dna_app.build_db clinvar            # downloads variant_summary.txt.gz
     python -m dna_app.build_db 1000g              # downloads the phase 3 sites VCF (~1.4 GB)
     python -m dna_app.build_db clinvar --source /path/to/variant_summary.txt.gz
+    python -m dna_app.build_db missing            # build whatever is not built yet
 
 Both commands accept ``--source`` (local path or URL) and ``--out``.
 Build ClinVar first: the 1000 Genomes build keeps every ClinVar site even
@@ -15,12 +16,15 @@ import argparse
 import gzip
 import io
 import os
+import shutil
 import sqlite3
 import sys
 import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+import numpy as np
 
 from . import config
 from .parsers import normalize_chrom
@@ -156,14 +160,43 @@ def build_clinvar(source: str, out: Path) -> int:
 # --------------------------------------------------------------------------- 1000 Genomes
 
 
-def _clinvar_keys(clinvar_db: Path) -> tuple[set[str], set[tuple[str, int]]]:
-    if not clinvar_db.exists():
-        return set(), set()
-    con = sqlite3.connect(clinvar_db)
-    rsids = {r for (r,) in con.execute("SELECT DISTINCT rsid FROM clinvar WHERE rsid IS NOT NULL")}
-    positions = set(con.execute("SELECT DISTINCT chrom, pos FROM clinvar WHERE assembly='GRCh37'"))
-    con.close()
-    return rsids, positions
+_CHROM_CODE = {**{str(i): i for i in range(1, 23)}, "X": 23, "Y": 24, "MT": 25}
+
+
+class ClinvarKeys:
+    """ClinVar rsIDs and GRCh37 positions as sorted int64 arrays.
+
+    Python sets of ~3M strings/tuples need well over 500 MB; these arrays
+    need ~50 MB, so the build fits on a small server.
+    """
+
+    def __init__(self, clinvar_db: Path):
+        self.rsids = np.array([], dtype=np.int64)
+        self.positions = np.array([], dtype=np.int64)
+        if not clinvar_db.exists():
+            return
+        con = sqlite3.connect(clinvar_db)
+        self.rsids = np.unique(np.fromiter(
+            (int(r[2:]) for (r,) in con.execute("SELECT rsid FROM clinvar WHERE rsid IS NOT NULL")),
+            dtype=np.int64))
+        self.positions = np.unique(np.fromiter(
+            (_CHROM_CODE[c] * 1_000_000_000 + p
+             for c, p in con.execute("SELECT chrom, pos FROM clinvar WHERE assembly='GRCh37'")),
+            dtype=np.int64))
+        con.close()
+
+    def __bool__(self) -> bool:
+        return len(self.rsids) > 0 or len(self.positions) > 0
+
+    @staticmethod
+    def _has(arr: np.ndarray, value: int) -> bool:
+        i = np.searchsorted(arr, value)
+        return i < len(arr) and arr[i] == value
+
+    def contains(self, rsid: str | None, chrom: str, pos: int) -> bool:
+        if rsid and rsid[2:].isdigit() and self._has(self.rsids, int(rsid[2:])):
+            return True
+        return self._has(self.positions, _CHROM_CODE[chrom] * 1_000_000_000 + pos)
 
 
 def build_1000g(source: str, out: Path, min_af: float, clinvar_db: Path) -> int:
@@ -172,8 +205,8 @@ def build_1000g(source: str, out: Path, min_af: float, clinvar_db: Path) -> int:
     Sites are kept if any superpopulation frequency is at least ``min_af`` or
     the site is in ClinVar (so rare pathogenic variants still get frequencies).
     """
-    keep_rsids, keep_pos = _clinvar_keys(clinvar_db)
-    if not keep_rsids:
+    keep = ClinvarKeys(clinvar_db)
+    if not keep:
         print("Note: ClinVar database not found; rare ClinVar sites may be filtered out.", file=sys.stderr)
     con = _fresh_db(out)
     con.execute(
@@ -204,7 +237,7 @@ def build_1000g(source: str, out: Path, min_af: float, clinvar_db: Path) -> int:
                     info[k] = v.split(",")
             if "AF" not in info:
                 continue
-            in_clinvar = (rsid in keep_rsids) or ((chrom, pos) in keep_pos)
+            in_clinvar = None  # looked up only for rare alleles
             for i, alt in enumerate(alts):
                 if alt.startswith("<"):
                     continue
@@ -218,8 +251,11 @@ def build_1000g(source: str, out: Path, min_af: float, clinvar_db: Path) -> int:
                 pop_max = max((f for f in freqs[1:] if f is not None), default=0.0)
                 pop_min = min((f for f in freqs[1:] if f is not None), default=0.0)
                 common = pop_max >= min_af and pop_min <= 1 - min_af
-                if not (common or in_clinvar):
-                    continue
+                if not common:
+                    if in_clinvar is None:
+                        in_clinvar = keep.contains(rsid, chrom, pos)
+                    if not in_clinvar:
+                        continue
                 batch.append((chrom, pos, rsid, ref, alt, *freqs))
             if len(batch) >= 100_000:
                 con.executemany("INSERT INTO af VALUES (?,?,?,?,?,?,?,?,?,?,?)", batch)
@@ -238,6 +274,34 @@ def build_1000g(source: str, out: Path, min_af: float, clinvar_db: Path) -> int:
     return n
 
 
+def set_build_status(message: str | None) -> None:
+    """Shown in the web UI while reference data is being prepared."""
+    path = config.DATA_DIR / "build_status.txt"
+    if message is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(message)
+
+
+def build_missing() -> None:
+    """Build whichever databases are missing, then delete the downloads (for first boot on a server)."""
+    downloads = config.DATA_DIR / "downloads"
+    try:
+        if not config.CLINVAR_DB.exists():
+            set_build_status("Downloading and indexing ClinVar (about 10 minutes)…")
+            build_clinvar(config.CLINVAR_URL, config.CLINVAR_DB)
+            shutil.rmtree(downloads, ignore_errors=True)
+        if not config.KG_DB.exists():
+            set_build_status("Downloading and indexing 1000 Genomes (about 30–60 minutes)…")
+            build_1000g(config.KG_SITES_URL, config.KG_DB, 0.01, config.CLINVAR_DB)
+            shutil.rmtree(downloads, ignore_errors=True)
+        set_build_status(None)
+    except Exception as e:
+        set_build_status(f"Reference data build failed: {e}. Restart the service to retry.")
+        raise
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -250,8 +314,11 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--min-af", type=float, default=0.01,
                    help="Drop sites rarer than this in every superpopulation (ClinVar sites are always kept)")
     g.add_argument("--clinvar-db", type=Path, default=config.CLINVAR_DB)
+    sub.add_parser("missing", help="Build any database that does not exist yet, with default sources")
     a = p.parse_args(argv)
-    if a.cmd == "clinvar":
+    if a.cmd == "missing":
+        build_missing()
+    elif a.cmd == "clinvar":
         build_clinvar(a.source, a.out)
     else:
         build_1000g(a.source, a.out, a.min_af, a.clinvar_db)

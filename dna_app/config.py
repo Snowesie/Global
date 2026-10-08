@@ -9,6 +9,9 @@ RESULTS_DIR = DATA_DIR / "results"
 CLINVAR_DB = Path(os.environ.get("DNA_CLINVAR_DB", DATA_DIR / "clinvar.sqlite"))
 KG_DB = Path(os.environ.get("DNA_1000G_DB", DATA_DIR / "1000g.sqlite"))
 
+# When set, every page and API call requires this password (HTTP Basic auth).
+APP_PASSWORD = os.environ.get("DNA_APP_PASSWORD") or None
+
 # Delete the raw upload once it has been analysed (results are kept).
 DELETE_UPLOADS = os.environ.get("DNA_KEEP_UPLOADS", "0") != "1"
 
