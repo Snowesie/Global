@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Genome Reader</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <h1>Genome Reader</h1>
+  <p class="sub">Read your raw DNA data against ClinVar and the 1000 Genomes Project.</p>
+</header>
+
+<main>
+  <section id="upload-view" class="card">
+    <div id="db-status" class="db-status"></div>
+    <label id="drop" class="drop" for="file">
+      <input id="file" type="file" hidden
+             accept=".txt,.csv,.tsv,.vcf,.gz,.zip,text/plain,application/gzip,application/zip">
+      <strong>Drop your DNA file here</strong>
+      <span>or click to choose — up to <span id="max-size">1 GB</span></span>
+      <span class="formats">23andMe · AncestryDNA · MyHeritage · FamilyTreeDNA · LivingDNA · VCF (.vcf / .vcf.gz) · .zip</span>
+    </label>
+    <div class="row">
+      <label>Genome build
+        <select id="assembly">
+          <option value="auto">Detect automatically</option>
+          <option value="GRCh37">GRCh37 / hg19</option>
+          <option value="GRCh38">GRCh38 / hg38</option>
+        </select>
+      </label>
+    </div>
+    <div id="progress" class="progress" hidden>
+      <div class="bar"><div id="bar-fill"></div></div>
+      <div id="progress-text"></div>
+    </div>
+    <div id="error" class="error" hidden></div>
+    <p class="privacy">Your file is processed on this server only and deleted as soon as analysis finishes.
+      Nothing is sent to third parties.</p>
+  </section>
+
+  <section id="results-view" hidden>
+    <div class="toolbar">
+      <button id="new-upload">← Analyse another file</button>
+      <span class="spacer"></span>
+      <button id="export-csv">Export findings (CSV)</button>
+      <button id="export-json">Download full report (JSON)</button>
+      <button id="delete-report" class="danger">Delete report</button>
+    </div>
+
+    <div class="disclaimer">
+      <strong>Not medical advice.</strong> Consumer genotyping arrays have meaningful false-positive rates
+      for rare variants, and ClinVar classifications change over time. Confirm anything concerning with
+      clinical-grade testing and a genetic counsellor before acting on it.
+    </div>
+
+    <div class="grid">
+      <div class="card" id="file-summary"></div>
+      <div class="card" id="clinvar-summary"></div>
+    </div>
+
+    <div class="card" id="ancestry"></div>
+
+    <div class="card">
+      <h2>ClinVar findings</h2>
+      <p class="muted">Variants in ClinVar where you carry at least one copy of the classified allele.
+        Benign variants are counted above but not listed.</p>
+      <div class="filters">
+        <input id="search" type="search" placeholder="Search gene, condition, rsID…">
+        <select id="cat-filter"></select>
+        <select id="star-filter">
+          <option value="0">Any review status</option>
+          <option value="1">★ and above</option>
+          <option value="2">★★ and above</option>
+          <option value="3">★★★ and above</option>
+        </select>
+        <select id="zyg-filter">
+          <option value="">Any zygosity</option>
+          <option value="heterozygous">Heterozygous (1 copy)</option>
+          <option value="homozygous">Homozygous (2 copies)</option>
+        </select>
+      </div>
+      <div id="findings-count" class="muted"></div>
+      <div class="table-wrap">
+        <table id="findings">
+          <thead>
+          <tr>
+            <th>Gene</th><th>Variant</th><th>Your genotype</th><th>Classification</th>
+            <th>Conditions</th><th>Population frequency (1000G)</th>
+          </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <button id="more" hidden>Show more</button>
+    </div>
+
+    <div class="card" id="notes" hidden></div>
+  </section>
+</main>
+
+<footer>
+  Data: <a href="https://www.ncbi.nlm.nih.gov/clinvar/" target="_blank" rel="noopener">ClinVar (NCBI)</a> ·
+  <a href="https://www.internationalgenome.org/" target="_blank" rel="noopener">1000 Genomes Project Phase 3</a>
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>
